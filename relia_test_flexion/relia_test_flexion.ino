@@ -21,8 +21,8 @@
 const bool LIRE_A = true;  // mettre true quand la voie A (J1) est reparee
 // 1 point ADC = 0.5 * 3.0 V / 32 / 2^23  (~0.0056 uV)
 const float UV_PAR_POINT = 0.5f * 3.0f / 32.0f / 8388608.0f * 1e6f;
-const int SAFE_PINS[] = {0, 1}; // SDA=0 SCL=1 (le scan large trouvait parfois une fausse paire, ex. SCL=2)
-const int NSAFE = sizeof(SAFE_PINS) / sizeof(SAFE_PINS[0]);
+#define SDA_PIN 0
+#define SCL_PIN 1
 
 long tareA = 0, tareB = 0;
 long dernier[2] = {0, 0};
@@ -35,12 +35,32 @@ uint8_t rd(uint8_t r) {
 }
 bool present() { Wire.beginTransmission(NAU_ADDR); return Wire.endTransmission() == 0; }
 
+// Si l'ESP32 redemarre en pleine lecture, le NAU7802 (toujours alimente)
+// peut garder SDA a 0 et bloquer le bus. On envoie des coups d'horloge
+// jusqu'a ce qu'il relache SDA, puis une condition STOP.
+void debloquerI2C() {
+  pinMode(SDA_PIN, INPUT_PULLUP);
+  pinMode(SCL_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(SCL_PIN, HIGH); delayMicroseconds(10);
+  for (int i = 0; i < 18 && digitalRead(SDA_PIN) == LOW; i++) {
+    digitalWrite(SCL_PIN, LOW); delayMicroseconds(10);
+    digitalWrite(SCL_PIN, HIGH); delayMicroseconds(10);
+  }
+  digitalWrite(SCL_PIN, LOW); delayMicroseconds(10);
+  pinMode(SDA_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(SDA_PIN, LOW); delayMicroseconds(10);
+  digitalWrite(SCL_PIN, HIGH); delayMicroseconds(10);
+  digitalWrite(SDA_PIN, HIGH); delayMicroseconds(10);
+  pinMode(SDA_PIN, INPUT_PULLUP);
+  pinMode(SCL_PIN, INPUT_PULLUP);
+}
 bool findNAU() {
-  for (int i = 0; i < NSAFE; i++) for (int j = 0; j < NSAFE; j++) {
-    if (i == j) continue;
+  for (int essai = 1; essai <= 5; essai++) {
     Wire.end(); delay(2);
-    Wire.begin(SAFE_PINS[i], SAFE_PINS[j]); Wire.setClock(100000); Wire.setTimeOut(20); delay(5);
-    if (present()) { Serial.printf("# NAU7802 trouve : SDA=%d SCL=%d\n", SAFE_PINS[i], SAFE_PINS[j]); return true; }
+    debloquerI2C();
+    Wire.begin(SDA_PIN, SCL_PIN); Wire.setClock(100000); Wire.setTimeOut(20); delay(5);
+    if (present()) { Serial.printf("# NAU7802 trouve : SDA=%d SCL=%d\n", SDA_PIN, SCL_PIN); return true; }
+    delay(100);
   }
   return false;
 }

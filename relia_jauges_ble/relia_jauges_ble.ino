@@ -40,8 +40,8 @@ const float SEUIL_BAS = -0.08; // g : fin de rep
 const unsigned long ECART_MIN_MS = 600;
 const unsigned long FIN_SERIE_MS = 6000;
 const float SEUIL_CHARGE_KG = 1.0;
-const int SAFE_PINS[] = {0, 1}; // SDA=0 SCL=1 (le scan large trouvait parfois une fausse paire, ex. SCL=2)
-const int NSAFE = sizeof(SAFE_PINS) / sizeof(SAFE_PINS[0]);
+#define SDA_PIN 0
+#define SCL_PIN 1
 #define NAU_ADDR 0x2A
 #define MPU_ADDR 0x68
 // ---------------- BLE (service UART Nordic) ----------------
@@ -82,16 +82,32 @@ uint8_t rd(uint8_t d, uint8_t r) {
   Wire.requestFrom((int)d, 1); return Wire.available() ? Wire.read() : 0;
 }
 bool present(uint8_t d) { Wire.beginTransmission(d); return Wire.endTransmission() == 0; }
+// Si l'ESP32 redemarre en pleine lecture, le NAU7802 (toujours alimente)
+// peut garder SDA a 0 et bloquer le bus. On envoie des coups d'horloge
+// jusqu'a ce qu'il relache SDA, puis une condition STOP.
+void debloquerI2C() {
+  pinMode(SDA_PIN, INPUT_PULLUP);
+  pinMode(SCL_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(SCL_PIN, HIGH); delayMicroseconds(10);
+  for (int i = 0; i < 18 && digitalRead(SDA_PIN) == LOW; i++) {
+    digitalWrite(SCL_PIN, LOW); delayMicroseconds(10);
+    digitalWrite(SCL_PIN, HIGH); delayMicroseconds(10);
+  }
+  digitalWrite(SCL_PIN, LOW); delayMicroseconds(10);
+  pinMode(SDA_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(SDA_PIN, LOW); delayMicroseconds(10);
+  digitalWrite(SCL_PIN, HIGH); delayMicroseconds(10);
+  digitalWrite(SDA_PIN, HIGH); delayMicroseconds(10);
+  pinMode(SDA_PIN, INPUT_PULLUP);
+  pinMode(SCL_PIN, INPUT_PULLUP);
+}
 bool findNAU() {
-  for (int i = 0; i < NSAFE; i++) for (int j = 0; j < NSAFE; j++) {
-    if (i == j) continue;
+  for (int essai = 1; essai <= 5; essai++) {
     Wire.end(); delay(2);
-    Wire.begin(SAFE_PINS[i], SAFE_PINS[j]); Wire.setClock(100000); Wire.setTimeOut(20); delay(5);
-    if (present(NAU_ADDR)) {
-      Serial.printf("# NAU7802 trouve : SDA=%d SCL=%d\n", SAFE_PINS[i], SAFE_PINS[j]);
-      return true;
-    }
-    delay(1);
+    debloquerI2C();
+    Wire.begin(SDA_PIN, SCL_PIN); Wire.setClock(100000); Wire.setTimeOut(20); delay(5);
+    if (present(NAU_ADDR)) { Serial.printf("# NAU7802 trouve : SDA=%d SCL=%d\n", SDA_PIN, SCL_PIN); return true; }
+    delay(100);
   }
   return false;
 }
