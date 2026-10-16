@@ -40,7 +40,7 @@ const float SEUIL_BAS = -0.08; // g : fin de rep
 const unsigned long ECART_MIN_MS = 600;
 const unsigned long FIN_SERIE_MS = 6000;
 const float SEUIL_CHARGE_KG = 1.0;
-const int SAFE_PINS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21}; // jamais 11-19
+const int SAFE_PINS[] = {0, 1}; // SDA=0 SCL=1 (le scan large trouvait parfois une fausse paire, ex. SCL=2)
 const int NSAFE = sizeof(SAFE_PINS) / sizeof(SAFE_PINS[0]);
 #define NAU_ADDR 0x2A
 #define MPU_ADDR 0x68
