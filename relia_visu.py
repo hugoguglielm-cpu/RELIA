@@ -152,7 +152,15 @@ def main():
     else:
         port = args[0] if args else trouver_port()
         print(f"Connexion a {port} ... (ne touche pas la tige au demarrage)")
-        source = LecteurSerie(port, donnees)
+        try:
+            source = LecteurSerie(port, donnees)
+        except Exception as e:
+            print(f"\nImpossible d'ouvrir {port} : {e}")
+            if "busy" in str(e).lower() or "denied" in str(e).lower() or "acces" in str(e).lower():
+                print("-> Le port est deja utilise par un autre programme :")
+                print("   ferme le Moniteur serie ET le Traceur serie d'Arduino (ou quitte Arduino),")
+                print("   et toute autre fenetre relia_visu.py encore ouverte, puis relance.")
+            sys.exit(1)
     source.start()
 
     fig = plt.figure("RELIA - flexion", figsize=(12, 5.5))
