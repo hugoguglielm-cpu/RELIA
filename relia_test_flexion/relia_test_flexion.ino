@@ -18,7 +18,7 @@
 #define LDO_CODE 5  // 3.0 V
 #define DISCARD 3
 #define NAU_ADDR 0x2A
-const bool LIRE_A = false; // mettre true quand la voie A (J1) est reparee
+const bool LIRE_A = true;  // mettre true quand la voie A (J1) est reparee
 // 1 point ADC = 0.5 * 3.0 V / 32 / 2^23  (~0.0056 uV)
 const float UV_PAR_POINT = 0.5f * 3.0f / 32.0f / 8388608.0f * 1e6f;
 const int SAFE_PINS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21}; // jamais 11-19
