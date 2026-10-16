@@ -4,6 +4,7 @@
  * Outils > Moniteur serie (ou Traceur serie), 115200 bauds.
  * Au demarrage : NE TOUCHE PAS la tige ~3 s (zero automatique).
  * Commande : t = refaire le zero
+ * LIRE_A = false : on ne lit que la voie B (si la voie A est en panne)
  *
  * Affiche A et B en microvolts (uV) par rapport au zero :
  *   - au repos : quelques uV autour de 0
@@ -17,6 +18,7 @@
 #define LDO_CODE 5  // 3.0 V
 #define DISCARD 3
 #define NAU_ADDR 0x2A
+const bool LIRE_A = false; // mettre true quand la voie A (J1) est reparee
 // 1 point ADC = 0.5 * 3.0 V / 32 / 2^23  (~0.0056 uV)
 const float UV_PAR_POINT = 0.5f * 3.0f / 32.0f / 8388608.0f * 1e6f;
 const int SAFE_PINS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21}; // jamais 11-19
@@ -95,7 +97,7 @@ long filtre(uint8_t ch, long v) {
 
 void tare() {
   long sa = 0, sb = 0;
-  for (int i = 0; i < 16; i++) { sa += readChannel(0); sb += readChannel(1); }
+  for (int i = 0; i < 16; i++) { if (LIRE_A) sa += readChannel(0); sb += readChannel(1); }
   tareA = sa / 16; tareB = sb / 16;
   hist3Pret[0] = hist3Pret[1] = false;
   // tension entre A+ et A- (et B+ / B-) au repos : doit faire quelques mV au plus
@@ -124,7 +126,7 @@ void loop() {
     String c = Serial.readStringUntil('\n'); c.trim();
     if (c.length() && tolower(c[0]) == 't') tare();
   }
-  long a = filtre(0, readChannel(0)) - tareA;
+  long a = LIRE_A ? filtre(0, readChannel(0)) - tareA : 0;
   long b = filtre(1, readChannel(1)) - tareB;
   Serial.printf("A_uV:%.1f B_uV:%.1f\n", a * UV_PAR_POINT, b * UV_PAR_POINT);
 }
