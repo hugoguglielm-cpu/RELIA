@@ -20,6 +20,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 #define GAIN_CODE 5 // x32
 #define RATE_CODE 3 // 80 mesures/s
@@ -191,8 +193,13 @@ void commande(String c) {
 
 // ---------------- setup / loop ----------------
 void setup() {
-  // Anti-brownout : le CPU a 80 MHz consomme moins (largement assez ici)
-  setCpuFrequencyMhz(80);
+  // Anti-brownout. Sur les petites cartes ESP32-C3, la radio Bluetooth fait
+  // chuter la tension un court instant au demarrage et le detecteur de
+  // "brownout" redemarre la carte en boucle. On le coupe : ce code n'ecrit
+  // rien en memoire flash, c'est sans risque ici. La vraie solution reste
+  // un condensateur 100-470 uF entre 3V3 et GND (ou une meilleure alim).
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  setCpuFrequencyMhz(80); // le CPU a 80 MHz consomme moins (largement assez ici)
   Serial.begin(115200);
   unsigned long t0 = millis();
   while (!Serial && millis() - t0 < 2000) delay(10);
@@ -202,7 +209,9 @@ void setup() {
   bool ok = false;
   for (int essai = 1; essai <= 5 && !ok; essai++) { ok = nauInit(); if (!ok) delay(300); }
   if (!ok) { while (1) { Serial.println("# ERREUR : NAU7802 ne demarre pas"); delay(2000); } }
+  Serial.println("# NAU7802 demarre");
   // 2) Bluetooth
+  Serial.println("# demarrage Bluetooth...");
   delay(200); // laisse l'alimentation se stabiliser avant la radio
   BLEDevice::init("RELIA");
   BLEDevice::setPower(ESP_PWR_LVL_N0); // 0 dBm : moins de pic de courant, portee ~5-10 m
