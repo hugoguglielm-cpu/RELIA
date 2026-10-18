@@ -144,12 +144,14 @@ bool readOne(long &v) {
   return true;
 }
 
+unsigned long nEchecs = 0; // lectures ratees (le NAU7802 ne donne pas de mesure)
 long readChannel(uint8_t ch) {
   uint8_t c2 = rd(0x02);
   wr(0x02, ch ? (c2 | 0x80) : (c2 & 0x7F));
   long v;
   for (int i = 0; i < DISCARD; i++) readOne(v);
   if (readOne(v)) dernier[ch] = v;
+  else nEchecs++;
   return dernier[ch];
 }
 
@@ -252,6 +254,12 @@ void loop() {
   snprintf(l, sizeof(l), "%ld,%ld,%ld\n", lroundf(aUv), lroundf(bUv), lroundf(fUv));
   bleEnvoyer(l);
 
+  // sans mesure, A et B resteraient figes a 0.0 : on le dit clairement
+  static unsigned long echecsVus = 0, dEchec = 0;
+  if (nEchecs != echecsVus && millis() - dEchec > 3000) {
+    msg("ERREUR : le NAU7802 ne donne pas de mesure (alim AVDD / cablage ?)");
+    echecsVus = nEchecs; dEchec = millis();
+  }
   if (fabsf(aUv) > SATURE_UV || fabsf(bUv) > SATURE_UV) {
     static unsigned long dAlerte = 0;
     if (millis() - dAlerte > 3000) { msg("ATTENTION : voie SATUREE (faux contact ?)"); dAlerte = millis(); }
