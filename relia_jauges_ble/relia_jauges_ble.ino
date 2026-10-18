@@ -231,6 +231,8 @@ void commande(String c) {
 }
 // ---------------- setup / loop ----------------
 void setup() {
+  // Anti-brownout : le CPU a 80 MHz consomme moins (largement assez ici)
+  setCpuFrequencyMhz(80);
   Serial.begin(115200);
   unsigned long t0 = millis();
   while (!Serial && millis() - t0 < 2000) delay(10);
@@ -250,7 +252,9 @@ void setup() {
   mpuOk = present(MPU_ADDR);
   if (mpuOk) wr(MPU_ADDR, 0x6B, 0x00);
   // 2) Bluetooth
+  delay(200); // laisse l'alimentation se stabiliser avant la radio
   BLEDevice::init("RELIA");
+  BLEDevice::setPower(ESP_PWR_LVL_N0); // 0 dBm : moins de pic de courant, portee ~5-10 m
   BLEServer *srv = BLEDevice::createServer();
   srv->setCallbacks(new ServeurCb());
   BLEService *svc = srv->createService(NUS_SERVICE);
