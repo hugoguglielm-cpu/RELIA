@@ -14,6 +14,9 @@
  *   vb    = n'utiliser que la voie B (si la voie A a un faux contact)
  *   va    = n'utiliser que la voie A      v = les deux voies (normal)
  *           -> apres un changement de voie, refaire le calibrage (x puis c..)
+ *   a     = zero automatique marche / arret (marche par defaut) : quand la
+ *           tige est au repos (moins de 1 kg, stable 3 s), le zero se
+ *           recale tout seul doucement -> plus besoin de "t" a chaque fois
  *   ?     = etat
  * Le calibrage reste en memoire meme apres debranchement.
  *
@@ -42,6 +45,13 @@ const float SATURE_UV = 45000;
 const float FORCE_MIN_CALIB_UV = 20;     // en dessous : poids trop leger pour calibrer
 const unsigned long PERIODE_TEXTE_MS = 500;
 #define NMOY 10                          // moyenne glissante (~1 s)
+// zero automatique : au repos (charge faible et stable pendant ~3 s),
+// le zero suit doucement les petites derives (temperature, montage...)
+const float AZ_KG = 1.0;                 // "au repos" = moins de 1 kg...
+const float AZ_UV = 15;                  // ... ou moins de 15 uV si pas calibre
+const float AZ_STABLE_UV = 5;            // ecart max a la moyenne pour "stable"
+const int AZ_ATTENTE = 30;               // mesures stables avant de corriger (~3 s)
+const float AZ_GAIN = 0.05;              // part de l'ecart corrigee a chaque mesure
 
 // ---------------- BLE (service UART Nordic, comme Bluefruit) ----------------
 #define NUS_SERVICE "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -74,6 +84,8 @@ float moy[NMOY]; int iMoy = 0, nMoy = 0;  // dernieres forces (uV)
 float kgMax = 0;
 bool modeCourbe = false;
 bool satureCourant = false;
+bool autoZero = true;
+int azCompteur = 0;
 int voies = 0; // 0 = A et B, 1 = A seule, 2 = B seule
 const char *NOM_VOIES[] = {"A et B", "A seule", "B seule"};
 
@@ -225,6 +237,12 @@ void commande(String c) {
     snprintf(b, sizeof(b), "voies utilisees : %s. Refais le calibrage (x puis c..)", NOM_VOIES[voies]);
     msg(b);
   }
+  else if (x == 'a') {
+    autoZero = !autoZero;
+    prefs.putBool("az", autoZero);
+    azCompteur = 0;
+    msg(autoZero ? "zero automatique : MARCHE" : "zero automatique : ARRET (fais t a la main)");
+  }
   else if (x == 'p') {
     modeCourbe = !modeCourbe;
     msg(modeCourbe ? "mode courbe : ouvre le Plotter" : "mode texte : ouvre l'UART");
@@ -244,11 +262,12 @@ void commande(String c) {
     msg(b);
   }
   else if (x == '?') {
-    snprintf(b, sizeof(b), "calibrage %s (%d point%s), voies : %s. Zero : A %.2f mV, B %.2f mV",
+    snprintf(b, sizeof(b), "calibrage %s (%d point%s), voies : %s, zero auto %s. Zero : A %.2f mV, B %.2f mV",
              k > 0 ? "OK" : "ABSENT", nPts, nPts > 1 ? "s" : "", NOM_VOIES[voies],
+             autoZero ? "MARCHE" : "ARRET",
              tareA * UV_PAR_POINT / 1000.0f, tareB * UV_PAR_POINT / 1000.0f);
     msg(b);
-    msg("commandes : t zero, c20 calibrer, x effacer, r max, p courbe, va/vb/v voies");
+    msg("commandes : t zero, c20 calibrer, x effacer, r max, p courbe, va/vb/v voies, a zero auto");
   }
 }
 
@@ -263,6 +282,7 @@ void setup() {
   sumFK = prefs.getDouble("fk", 0); sumFF = prefs.getDouble("ff", 0); nPts = prefs.getInt("n", 0);
   k = (sumFF > 0) ? sumFK / sumFF : 0;
   voies = prefs.getInt("voies", 0);
+  autoZero = prefs.getBool("az", true);
 
   // 1) Bluetooth d'abord (ordre qui evite les brownouts sur cette carte)
   Serial.println("# demarrage Bluetooth...");
@@ -318,6 +338,20 @@ void loop() {
   float fMoy = forceMoyenne();
   float kg = (k > 0) ? fMoy * k : 0;
   if (!sature && kg > kgMax) kgMax = kg;
+
+  // zero automatique : tige au repos (charge faible ET stable) -> on recale
+  // doucement le zero sur la mesure actuelle. Jamais pendant une saturation.
+  bool repos = (k > 0) ? (kg < AZ_KG) : (fMoy < AZ_UV);
+  bool stable = fabsf(fUv - fMoy) < AZ_STABLE_UV;
+  if (autoZero && !sature && repos && stable) {
+    if (azCompteur < AZ_ATTENTE) azCompteur++;
+    else {
+      tareA += lroundf(a * AZ_GAIN);
+      tareB += lroundf(b * AZ_GAIN);
+    }
+  } else {
+    azCompteur = 0;
+  }
 
   // USB : meme format que relia_test_flexion (Traceur serie / relia_visu.py)
   Serial.printf("A_uV:%.1f B_uV:%.1f\n", aUv, bUv);
