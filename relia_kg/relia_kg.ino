@@ -11,6 +11,9 @@
  *   x     = effacer le calibrage
  *   r     = remettre le max a 0
  *   p     = mode courbe (Plotter) / mode texte (UART)
+ *   vb    = n'utiliser que la voie B (si la voie A a un faux contact)
+ *   va    = n'utiliser que la voie A      v = les deux voies (normal)
+ *           -> apres un changement de voie, refaire le calibrage (x puis c..)
  *   ?     = etat
  * Le calibrage reste en memoire meme apres debranchement.
  *
@@ -70,6 +73,9 @@ double sumFK = 0, sumFF = 0; int nPts = 0; float k = 0;
 float moy[NMOY]; int iMoy = 0, nMoy = 0;  // dernieres forces (uV)
 float kgMax = 0;
 bool modeCourbe = false;
+bool satureCourant = false;
+int voies = 0; // 0 = A et B, 1 = A seule, 2 = B seule
+const char *NOM_VOIES[] = {"A et B", "A seule", "B seule"};
 
 // ---------------- envoi ----------------
 // Decoupe en paquets de 20 octets : marche meme si l'iPhone garde la
@@ -211,6 +217,14 @@ void commande(String c) {
   if (x == 't') tare();
   else if (x == 'r') { kgMax = 0; msg("max remis a 0"); }
   else if (x == 'x') { sumFK = sumFF = 0; nPts = 0; k = 0; sauverCalib(); msg("calibrage efface"); }
+  else if (x == 'v') {
+    String r = c.substring(1); r.toLowerCase();
+    voies = (r == "a") ? 1 : (r == "b") ? 2 : 0;
+    prefs.putInt("voies", voies);
+    nMoy = 0; kgMax = 0;
+    snprintf(b, sizeof(b), "voies utilisees : %s. Refais le calibrage (x puis c..)", NOM_VOIES[voies]);
+    msg(b);
+  }
   else if (x == 'p') {
     modeCourbe = !modeCourbe;
     msg(modeCourbe ? "mode courbe : ouvre le Plotter" : "mode texte : ouvre l'UART");
@@ -219,6 +233,7 @@ void commande(String c) {
     float kg = c.substring(1).toFloat();
     float f = forceMoyenne();
     if (kg <= 0) { msg("ecris le poids apres c, ex : c20"); return; }
+    if (satureCourant) { msg("impossible : une voie est SATUREE (envoie vb ou va)"); return; }
     if (f < FORCE_MIN_CALIB_UV) {
       snprintf(b, sizeof(b), "signal trop faible (%.0f uV) : accroche le poids d'abord", f);
       msg(b); return;
@@ -229,11 +244,11 @@ void commande(String c) {
     msg(b);
   }
   else if (x == '?') {
-    snprintf(b, sizeof(b), "calibrage %s (%d point%s). Zero : A %.2f mV, B %.2f mV",
-             k > 0 ? "OK" : "ABSENT", nPts, nPts > 1 ? "s" : "",
+    snprintf(b, sizeof(b), "calibrage %s (%d point%s), voies : %s. Zero : A %.2f mV, B %.2f mV",
+             k > 0 ? "OK" : "ABSENT", nPts, nPts > 1 ? "s" : "", NOM_VOIES[voies],
              tareA * UV_PAR_POINT / 1000.0f, tareB * UV_PAR_POINT / 1000.0f);
     msg(b);
-    msg("commandes : t zero, c20 calibrer, x effacer, r max, p courbe");
+    msg("commandes : t zero, c20 calibrer, x effacer, r max, p courbe, va/vb/v voies");
   }
 }
 
@@ -247,6 +262,7 @@ void setup() {
   prefs.begin("relia_kg", false); // nouveau nom : les anciens calibrages (autres unites) sont ignores
   sumFK = prefs.getDouble("fk", 0); sumFF = prefs.getDouble("ff", 0); nPts = prefs.getInt("n", 0);
   k = (sumFF > 0) ? sumFK / sumFF : 0;
+  voies = prefs.getInt("voies", 0);
 
   // 1) Bluetooth d'abord (ordre qui evite les brownouts sur cette carte)
   Serial.println("# demarrage Bluetooth...");
@@ -293,11 +309,15 @@ void loop() {
   long a = filtre(0, readChannel(0)) - tareA;
   long b = filtre(1, readChannel(1)) - tareB;
   float aUv = a * UV_PAR_POINT, bUv = b * UV_PAR_POINT;
-  float fUv = sqrtf(aUv * aUv + bUv * bUv);
-  moy[iMoy] = fUv; iMoy = (iMoy + 1) % NMOY; if (nMoy < NMOY) nMoy++;
+  bool satA = fabsf(aUv) > SATURE_UV, satB = fabsf(bUv) > SATURE_UV;
+  // une voie saturee (faux contact) donnerait un poids faux : on ne l'affiche pas
+  bool sature = (voies != 2 && satA) || (voies != 1 && satB);
+  satureCourant = sature;
+  float fUv = (voies == 1) ? fabsf(aUv) : (voies == 2) ? fabsf(bUv) : sqrtf(aUv * aUv + bUv * bUv);
+  if (!sature) { moy[iMoy] = fUv; iMoy = (iMoy + 1) % NMOY; if (nMoy < NMOY) nMoy++; }
   float fMoy = forceMoyenne();
   float kg = (k > 0) ? fMoy * k : 0;
-  if (kg > kgMax) kgMax = kg;
+  if (!sature && kg > kgMax) kgMax = kg;
 
   // USB : meme format que relia_test_flexion (Traceur serie / relia_visu.py)
   Serial.printf("A_uV:%.1f B_uV:%.1f\n", aUv, bUv);
@@ -305,14 +325,18 @@ void loop() {
   static unsigned long dTexte = 0;
   if (modeCourbe) {
     // Plotter de Bluefruit : un nombre par ligne (kg, ou uV si pas calibre)
-    char l[24];
-    snprintf(l, sizeof(l), "%.2f\n", k > 0 ? kg : fMoy);
-    bleEnvoyer(l);
+    if (!sature) {
+      char l[24];
+      snprintf(l, sizeof(l), "%.2f\n", k > 0 ? kg : fMoy);
+      bleEnvoyer(l);
+    }
   } else if (millis() - dTexte > PERIODE_TEXTE_MS) {
     dTexte = millis();
-    char l[64];
-    if (k > 0) snprintf(l, sizeof(l), "%.1f kg   (max %.1f)\n", kg, kgMax);
-    else snprintf(l, sizeof(l), "non calibre : %.0f uV\n", fMoy);
+    char l[80];
+    if (sature) snprintf(l, sizeof(l), "--- voie %s SATUREE (faux contact) : envoie vb ou va\n",
+                         (voies != 2 && satA) ? "A" : "B");
+    else if (k > 0) snprintf(l, sizeof(l), "%.1f kg   (max %.1f)\n", kg, kgMax);
+    else snprintf(l, sizeof(l), "non calibre : %.0f uV  (A %.0f, B %.0f)\n", fMoy, aUv, bUv);
     bleEnvoyer(l);
   }
 
@@ -322,7 +346,7 @@ void loop() {
     msg("ERREUR : le NAU7802 ne donne pas de mesure (alim AVDD / cablage ?)");
     echecsVus = nEchecs; dEchec = millis();
   }
-  if (fabsf(aUv) > SATURE_UV || fabsf(bUv) > SATURE_UV) {
+  if (sature) {
     static unsigned long dAlerte = 0;
     if (millis() - dAlerte > 3000) { msg("ATTENTION : voie SATUREE (faux contact ?)"); dAlerte = millis(); }
   }
